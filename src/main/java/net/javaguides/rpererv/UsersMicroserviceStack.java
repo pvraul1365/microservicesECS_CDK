@@ -5,6 +5,7 @@ import java.util.Map;
 import software.amazon.awscdk.Duration;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
+import software.amazon.awscdk.services.applicationautoscaling.EnableScalingProps;
 import software.amazon.awscdk.services.ecr.Repository;
 
 import software.amazon.awscdk.services.ecs.AwsLogDriverProps;
@@ -13,13 +14,16 @@ import software.amazon.awscdk.services.ecs.ContainerDefinition;
 import software.amazon.awscdk.services.ecs.ContainerDefinitionOptions;
 import software.amazon.awscdk.services.ecs.ContainerImage;
 import software.amazon.awscdk.services.ecs.CpuArchitecture;
+import software.amazon.awscdk.services.ecs.CpuUtilizationScalingProps;
 import software.amazon.awscdk.services.ecs.FargateTaskDefinition;
 import software.amazon.awscdk.services.ecs.FargateTaskDefinitionProps;
 import software.amazon.awscdk.services.ecs.LogDriver;
 import software.amazon.awscdk.services.ecs.OperatingSystemFamily;
 import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.Protocol;
+import software.amazon.awscdk.services.ecs.RequestCountScalingProps;
 import software.amazon.awscdk.services.ecs.RuntimePlatform;
+import software.amazon.awscdk.services.ecs.ScalableTaskCount;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateServiceProps;
 import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
@@ -85,7 +89,7 @@ public class UsersMicroserviceStack extends Stack {
                         .loadBalancerName("users-microservice-lb") // Nombre del ALB
                         .cpu(512)
                         .memoryLimitMiB(1024)
-                        .desiredCount(2)                           // ¡2 Instancias levantadas!
+                        .desiredCount(1)                           // ¡1 Instancias levantadas!
                         .taskDefinition(taskDefinition)
                         .publicLoadBalancer(true)                  // Acceso desde internet
                         .assignPublicIp(true)                      // Necesario al no tener NAT Gateway
@@ -100,6 +104,36 @@ public class UsersMicroserviceStack extends Stack {
                         .healthyThresholdCount(2)
                         .unhealthyThresholdCount(5)
                         .interval(Duration.seconds(30))
+                        .build()
+        );
+
+        // 5. Configurar el Auto Scaling
+        // Primero definimos el rango de capacidad (Min: 1, Max: 3)
+        ScalableTaskCount scalableTarget = albService.getService().autoScaleTaskCount(
+                EnableScalingProps.builder()
+                        .minCapacity(1)
+                        .maxCapacity(3)
+                        .build()
+        );
+
+        // Aplicamos la política de Target Tracking basada en el número de peticiones al ALB
+        scalableTarget.scaleOnRequestCount("UsersMicroserviceRequestScaling",
+                RequestCountScalingProps.builder()
+                        .policyName("users-micro-service-target-scaling-policy")
+                        .requestsPerTarget(10)            // Tu valor objetivo: 10 peticiones
+                        .scaleOutCooldown(Duration.seconds(30)) // Tiempo de espera para subir
+                        .scaleInCooldown(Duration.seconds(30))  // Tiempo de espera para bajar
+                        .targetGroup(albService.getTargetGroup())
+                        .build()
+        );
+
+        // 6. Añadir política adicional por utilización de CPU
+        scalableTarget.scaleOnCpuUtilization("UsersMicroserviceCpuScaling",
+                CpuUtilizationScalingProps.builder()
+                        .policyName("users-microservice-cpu-scaling-policy")
+                        .targetUtilizationPercent(70) // Objetivo: Mantener la CPU al 70%
+                        .scaleOutCooldown(Duration.seconds(30))
+                        .scaleInCooldown(Duration.seconds(30))
                         .build()
         );
     }
