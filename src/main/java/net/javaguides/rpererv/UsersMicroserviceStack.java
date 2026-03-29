@@ -1,14 +1,28 @@
 package net.javaguides.rpererv;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Map;
+import software.amazon.awscdk.Duration;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
-import software.amazon.awscdk.services.ec2.*;
 import software.amazon.awscdk.services.ecr.Repository;
-import software.amazon.awscdk.services.ecs.*;
+
+import software.amazon.awscdk.services.ecs.AwsLogDriverProps;
+import software.amazon.awscdk.services.ecs.Cluster;
+import software.amazon.awscdk.services.ecs.ContainerDefinition;
+import software.amazon.awscdk.services.ecs.ContainerDefinitionOptions;
+import software.amazon.awscdk.services.ecs.ContainerImage;
+import software.amazon.awscdk.services.ecs.CpuArchitecture;
+import software.amazon.awscdk.services.ecs.FargateTaskDefinition;
+import software.amazon.awscdk.services.ecs.FargateTaskDefinitionProps;
+import software.amazon.awscdk.services.ecs.LogDriver;
+import software.amazon.awscdk.services.ecs.OperatingSystemFamily;
+import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.Protocol;
+import software.amazon.awscdk.services.ecs.RuntimePlatform;
+import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
+import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateServiceProps;
+import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
 import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.logs.RetentionDays;
 import software.constructs.Construct;
@@ -46,7 +60,7 @@ public class UsersMicroserviceStack extends Stack {
                 .resources(Arrays.asList("*"))
                 .build());
 
-        // 2. Añadir el Contenedor
+        // 2. Añadir el Contenedor (Puerto 8081 para Spring Boot)
         ContainerDefinition container = taskDefinition.addContainer("UsersContainer",
                 ContainerDefinitionOptions.builder()
                         .containerName("users-microservice")
@@ -63,28 +77,31 @@ public class UsersMicroserviceStack extends Stack {
                 .protocol(Protocol.TCP)
                 .build());
 
-        // 3. Crear Security Group
-        SecurityGroup sg = new SecurityGroup(this, "UsersServiceSG", SecurityGroupProps.builder()
-                .vpc(serviceProps.cluster().getVpc())
-                .securityGroupName("users-microservice-ecs-service-sg")
-                .description("Users Microservices ECS Security Group")
-                .allowAllOutbound(true)
-                .build());
+        // 3. Crear el Servicio Balanceado (El "Pattern")
+        ApplicationLoadBalancedFargateService albService = new ApplicationLoadBalancedFargateService(this, "UsersALBService",
+                ApplicationLoadBalancedFargateServiceProps.builder()
+                        .cluster(serviceProps.cluster())           // Tu cluster existente
+                        .serviceName("users-microservice-lb-service")
+                        .loadBalancerName("users-microservice-lb") // Nombre del ALB
+                        .cpu(512)
+                        .memoryLimitMiB(1024)
+                        .desiredCount(2)                           // ¡2 Instancias levantadas!
+                        .taskDefinition(taskDefinition)
+                        .publicLoadBalancer(true)                  // Acceso desde internet
+                        .assignPublicIp(true)                      // Necesario al no tener NAT Gateway
+                        .build());
 
-        sg.addIngressRule(Peer.anyIpv4(), Port.tcp(8081), "Allow HTTP access on 8081");
-
-        // 4. Crear el Servicio Fargate
-        new FargateService(this, "UsersFargateService", FargateServiceProps.builder()
-                .cluster(serviceProps.cluster())
-                .vpcSubnets(SubnetSelection.builder()
-                        .subnetType(SubnetType.PUBLIC)
-                        .build())
-                .serviceName("users-microservice-task-definition-service")
-                .taskDefinition(taskDefinition)
-                .desiredCount(1)
-                .assignPublicIp(true) // Requerido para acceder desde internet
-                .securityGroups(Collections.singletonList(sg))
-                .build());
+        // 4. Configurar el Health Check (Actuator)
+        albService.getTargetGroup().configureHealthCheck(
+                HealthCheck.builder()
+                        .path("/actuator/health")
+                        .port("8081")
+                        .protocol(software.amazon.awscdk.services.elasticloadbalancingv2.Protocol.HTTP)
+                        .healthyThresholdCount(2)
+                        .unhealthyThresholdCount(5)
+                        .interval(Duration.seconds(30))
+                        .build()
+        );
     }
 
 }
