@@ -1,11 +1,14 @@
 package net.javaguides.rpererv;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
+import software.amazon.awscdk.CfnOutput;
 import software.amazon.awscdk.Duration;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
 import software.amazon.awscdk.services.applicationautoscaling.EnableScalingProps;
+import software.amazon.awscdk.services.ec2.Port;
 import software.amazon.awscdk.services.ecr.Repository;
 
 import software.amazon.awscdk.services.ecs.AwsLogDriverProps;
@@ -29,6 +32,7 @@ import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFarga
 import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
 import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.logs.RetentionDays;
+import software.amazon.awscdk.services.rds.DatabaseInstance;
 import software.constructs.Construct;
 
 /**
@@ -64,12 +68,26 @@ public class UsersMicroserviceStack extends Stack {
                 .resources(Arrays.asList("*"))
                 .build());
 
+        // DB.1. Preparar el mapa de variables de entorno
+        Map<String, String> envVariables = new HashMap<>();
+
+        // Variables estándar de Spring
+        envVariables.put("spring.profiles.active", "prod");
+
+        // Variables que coinciden con tu application.properties
+        // El endpoint de RDS (ej: users.xxxx.us-east-1.rds.amazonaws.com)
+        envVariables.put("HOST_NAME", serviceProps.database().getDbInstanceEndpointAddress());
+        envVariables.put("DATABASE_PORT", "3306");
+        envVariables.put("DATABASE_NAME", "users");
+        envVariables.put("DATABASE_USER_NAME", "admin"); // El master username que definiste
+        envVariables.put("DATABASE_USER_PASSWORD", "zugqIn-tuzxot-juxki0"); // Tu master password
+
         // 2. Añadir el Contenedor (Puerto 8081 para Spring Boot)
         ContainerDefinition container = taskDefinition.addContainer("UsersContainer",
                 ContainerDefinitionOptions.builder()
                         .containerName("users-microservice")
                         .image(ContainerImage.fromEcrRepository(serviceProps.repository()))
-                        .environment(Map.of("spring.profiles.active", "dev"))
+                        .environment(envVariables)
                         .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
                                 .logRetention(RetentionDays.ONE_DAY)
                                 .streamPrefix("users-microservice")
@@ -93,6 +111,7 @@ public class UsersMicroserviceStack extends Stack {
                         .taskDefinition(taskDefinition)
                         .publicLoadBalancer(true)                  // Acceso desde internet
                         .assignPublicIp(true)                      // Necesario al no tener NAT Gateway
+                        .healthCheckGracePeriod(Duration.seconds(60)) // Le da 1 minuto a Spring para arrancar antes de empezar a juzgar su salud
                         .build());
 
         // 4. Configurar el Health Check (Actuator)
@@ -106,6 +125,10 @@ public class UsersMicroserviceStack extends Stack {
                         .interval(Duration.seconds(30))
                         .build()
         );
+
+        // DB.3. Dar permiso al Microservicio para conectarse a la DB
+        // serviceProps.database().getConnections().allowDefaultPortFrom(albService.getService(), "Allow ECS to connect to MySQL");
+        albService.getService().getConnections().allowTo(serviceProps.database(), Port.tcp(3306), "Allow Microservice to contact MySQL");
 
         // 5. Configurar el Auto Scaling
         // Primero definimos el rango de capacidad (Min: 1, Max: 3)
@@ -136,8 +159,14 @@ public class UsersMicroserviceStack extends Stack {
                         .scaleInCooldown(Duration.seconds(30))
                         .build()
         );
+
+        CfnOutput.Builder.create(this, "UsersServiceURL")
+                .value("http://" + albService.getLoadBalancer().getLoadBalancerDnsName())
+                .description("URL pública para acceder al Microservicio de Usuarios")
+                .exportName("UsersServiceExternalURL")
+                .build();
     }
 
 }
 
-record UsersServiceProps(Cluster cluster, Repository repository) {}
+record UsersServiceProps(Cluster cluster, Repository repository, DatabaseInstance database) {}

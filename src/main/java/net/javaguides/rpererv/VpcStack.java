@@ -36,6 +36,11 @@ public class VpcStack extends Stack {
                                 .name("Public")
                                 .subnetType(SubnetType.PUBLIC)
                                 .cidrMask(24)
+                                .build(),
+                        SubnetConfiguration.builder()
+                                .name("Private")
+                                .subnetType(SubnetType.PRIVATE_ISOLATED) // <--- Añade esto
+                                .cidrMask(24)
                                 .build()
                 ))
                 .build());
