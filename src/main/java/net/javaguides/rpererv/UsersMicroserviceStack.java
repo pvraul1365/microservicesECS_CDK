@@ -7,26 +7,21 @@ import software.amazon.awscdk.CfnOutput;
 import software.amazon.awscdk.Duration;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
-import software.amazon.awscdk.services.applicationautoscaling.EnableScalingProps;
 import software.amazon.awscdk.services.ec2.Port;
 import software.amazon.awscdk.services.ecr.Repository;
-
 import software.amazon.awscdk.services.ecs.AwsLogDriverProps;
 import software.amazon.awscdk.services.ecs.Cluster;
 import software.amazon.awscdk.services.ecs.ContainerDefinition;
 import software.amazon.awscdk.services.ecs.ContainerDefinitionOptions;
 import software.amazon.awscdk.services.ecs.ContainerImage;
 import software.amazon.awscdk.services.ecs.CpuArchitecture;
-import software.amazon.awscdk.services.ecs.CpuUtilizationScalingProps;
 import software.amazon.awscdk.services.ecs.FargateTaskDefinition;
 import software.amazon.awscdk.services.ecs.FargateTaskDefinitionProps;
 import software.amazon.awscdk.services.ecs.LogDriver;
 import software.amazon.awscdk.services.ecs.OperatingSystemFamily;
 import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.Protocol;
-import software.amazon.awscdk.services.ecs.RequestCountScalingProps;
 import software.amazon.awscdk.services.ecs.RuntimePlatform;
-import software.amazon.awscdk.services.ecs.ScalableTaskCount;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateServiceProps;
 import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
@@ -45,6 +40,8 @@ import software.constructs.Construct;
  * @since 1.17
  */
 public class UsersMicroserviceStack extends Stack {
+
+    private final ApplicationLoadBalancedFargateService albService;
 
     public UsersMicroserviceStack(final Construct scope, final String id, final StackProps props,
                                   UsersServiceProps serviceProps) {
@@ -81,6 +78,7 @@ public class UsersMicroserviceStack extends Stack {
         envVariables.put("DATABASE_NAME", "users");
         envVariables.put("DATABASE_USER_NAME", "admin"); // El master username que definiste
         envVariables.put("DATABASE_USER_PASSWORD", "zugqIn-tuzxot-juxki0"); // Tu master password
+        envVariables.put("ALBUMS_URL", "http://photo-albums:8080/albums"); // URL del microservicio de albums usando Service Connect (nombre del servicio + puerto)
 
         // 2. Añadir el Contenedor (Puerto 8081 para Spring Boot)
         ContainerDefinition container = taskDefinition.addContainer("UsersContainer",
@@ -100,7 +98,7 @@ public class UsersMicroserviceStack extends Stack {
                 .build());
 
         // 3. Crear el Servicio Balanceado (El "Pattern")
-        ApplicationLoadBalancedFargateService albService = new ApplicationLoadBalancedFargateService(this, "UsersALBService",
+        this.albService = new ApplicationLoadBalancedFargateService(this, "UsersALBService",
                 ApplicationLoadBalancedFargateServiceProps.builder()
                         .cluster(serviceProps.cluster())           // Tu cluster existente
                         .serviceName("users-microservice-lb-service")
@@ -115,7 +113,7 @@ public class UsersMicroserviceStack extends Stack {
                         .build());
 
         // 4. Configurar el Health Check (Actuator)
-        albService.getTargetGroup().configureHealthCheck(
+        this.albService.getTargetGroup().configureHealthCheck(
                 HealthCheck.builder()
                         .path("/actuator/health")
                         .port("8081")
@@ -126,10 +124,11 @@ public class UsersMicroserviceStack extends Stack {
                         .build()
         );
 
-        // DB.3. Dar permiso al Microservicio para conectarse a la DB
+        // DB.2. Dar permiso al Microservicio para conectarse a la DB
         // serviceProps.database().getConnections().allowDefaultPortFrom(albService.getService(), "Allow ECS to connect to MySQL");
-        albService.getService().getConnections().allowTo(serviceProps.database(), Port.tcp(3306), "Allow Microservice to contact MySQL");
+        this.albService.getService().getConnections().allowTo(serviceProps.database(), Port.tcp(3306), "Allow Microservice to contact MySQL");
 
+        /*
         // 5. Configurar el Auto Scaling
         // Primero definimos el rango de capacidad (Min: 1, Max: 3)
         ScalableTaskCount scalableTarget = albService.getService().autoScaleTaskCount(
@@ -159,6 +158,7 @@ public class UsersMicroserviceStack extends Stack {
                         .scaleInCooldown(Duration.seconds(30))
                         .build()
         );
+         */
 
         CfnOutput.Builder.create(this, "UsersServiceURL")
                 .value("http://" + albService.getLoadBalancer().getLoadBalancerDnsName())
@@ -167,6 +167,9 @@ public class UsersMicroserviceStack extends Stack {
                 .build();
     }
 
+    public ApplicationLoadBalancedFargateService getAlbService() {
+        return albService;
+    }
 }
 
 record UsersServiceProps(Cluster cluster, Repository repository, DatabaseInstance database) {}

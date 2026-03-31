@@ -5,6 +5,7 @@ import java.util.Map;
 import software.amazon.awscdk.App;
 import software.amazon.awscdk.Environment;
 import software.amazon.awscdk.StackProps;
+import software.amazon.awscdk.services.ec2.Port;
 
 public class MicroservicesEcsCdkApp {
     public static void main(final String[] args) {
@@ -35,7 +36,9 @@ public class MicroservicesEcsCdkApp {
 
         // 3. BASE DE DATOS
         // Le pasamos la VPC porque la DB necesita saber dónde ubicarse
-        DatabaseStack databaseStack = new DatabaseStack(app, "MicroservicesDatabase",
+        UsersDatabaseStack usersDatabaseStack = new UsersDatabaseStack(app, "UsersDatabase",
+                commonProps, vpcStack.getVpc());
+        AlbumsDatabaseStack albumsDbStack = new AlbumsDatabaseStack(app, "AlbumsDatabase",
                 commonProps, vpcStack.getVpc());
 
         // 4. Cluster ECS
@@ -43,15 +46,44 @@ public class MicroservicesEcsCdkApp {
                 commonProps,
                 new ClusterStackProps(vpcStack.getVpc()));
 
-        // 5. Servicio Fargate
+
+
+        // 5.1 Servicio Fargate photo-albums
         // Nota: El paso de ecrStack.getUsersMicroserviceRepository() crea una dependencia implícita
-        new UsersMicroserviceStack(app, "UsersMicroserviceService",
+        PhotoAlbumsMicroserviceStack albumsStack = new PhotoAlbumsMicroserviceStack(app, "PhotoAlbumsMicroserviceService",
+                commonProps,
+                new PhotoAlbumsServiceProps(
+                        clusterStack.getCluster(),
+                        ecrStack.getPhotoAlbumsMicroserviceRepository(),
+                        albumsDbStack.getDatabase()
+                ));
+
+        // 5.2 Servicio Fargate users
+        // Nota: El paso de ecrStack.getUsersMicroserviceRepository() crea una dependencia implícita
+        UsersMicroserviceStack usersStack = new UsersMicroserviceStack(app, "UsersMicroserviceService",
                 commonProps,
                 new UsersServiceProps(
                         clusterStack.getCluster(),
                         ecrStack.getUsersMicroserviceRepository(),
-                        databaseStack.getDatabase()
+                        usersDatabaseStack.getDatabase()
                 ));
+
+        // Permitir que el Security Group de Users se conecte al de Albums en el puerto 8080
+        // Añadimos .getService() antes de .getConnections()
+        // En lugar de allowFrom (que Albums mire a Users),
+        // usamos allowTo (que Users pida permiso para salir hacia Albums)
+        usersStack.getAlbService().getService().getConnections().allowTo(
+                albumsStack.getAlbService().getService(),
+                Port.tcp(8080),
+                "Users microservice can send traffic to Albums"
+        );
+
+        usersStack.getAlbService().getService().enableServiceConnect(
+                software.amazon.awscdk.services.ecs.ServiceConnectProps.builder()
+                        .namespace("local") // IMPORTANTE: El mismo que definiste en el Cluster y en Albums
+                        .build()
+        );
+        //usersStack.addDependency(albumsStack);
 
         // Generar el template de CloudFormation
         app.synth();

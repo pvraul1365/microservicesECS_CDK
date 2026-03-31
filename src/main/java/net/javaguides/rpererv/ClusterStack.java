@@ -3,6 +3,7 @@ package net.javaguides.rpererv;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
 import software.amazon.awscdk.services.ec2.Vpc;
+import software.amazon.awscdk.services.ecs.CloudMapNamespaceOptions;
 import software.amazon.awscdk.services.ecs.Cluster;
 import software.amazon.awscdk.services.ecs.ClusterProps;
 import software.amazon.awscdk.services.ecs.ContainerInsights;
@@ -26,9 +27,13 @@ public class ClusterStack extends Stack {
         super(scope, id, props);
 
         this.cluster = new Cluster(this, "Cluster", ClusterProps.builder()
-                .clusterName("photo-app-microservices-fargate-cluster") // name of the ECS cluster, same as the cluster name in the task definition
-                .vpc(clusterStackProps.vpc()) // to associate the ECS cluster with the VPC created in the VpcStack
-                .containerInsightsV2(ContainerInsights.ENABLED) // to enable container insights for monitoring and logging, which will create a CloudWatch log group with the name /aws/ecs/containerinsights/ECommerceCluster/logs, where ECommerceCluster is the name of the ECS cluster
+                .clusterName("photo-app-microservices-fargate-cluster")
+                .vpc(clusterStackProps.vpc())
+                .containerInsightsV2(ContainerInsights.ENABLED)
+                // AÑADE ESTO:
+                .defaultCloudMapNamespace(CloudMapNamespaceOptions.builder()
+                        .name("local") // Este debe coincidir con el que pusiste en PhotoAlbumsMicroserviceStack
+                        .build())
                 .build());
 
     }

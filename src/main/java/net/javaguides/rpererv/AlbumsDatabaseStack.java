@@ -1,6 +1,5 @@
 package net.javaguides.rpererv;
 
-import software.amazon.awscdk.CfnOutput;
 import software.amazon.awscdk.Duration;
 import software.amazon.awscdk.RemovalPolicy;
 import software.amazon.awscdk.Stack;
@@ -25,52 +24,49 @@ import software.constructs.Construct;
  * Created by IntelliJ, Spring Framework Guru.
  *
  * @author architecture - pvraul
- * @version 29/03/2026 - 16:51
+ * @version 29/03/2026 - 19:41
  * @since 1.17
  */
-public class DatabaseStack extends Stack {
+public class AlbumsDatabaseStack extends Stack {
+
     private final DatabaseInstance database;
     private final SecurityGroup dbSg;
 
-    public DatabaseStack(final Construct scope, final String id, final StackProps props, Vpc vpc) {
+    public AlbumsDatabaseStack(final Construct scope, final String id, final StackProps props, Vpc vpc) {
         super(scope, id, props);
 
-        // 1. Security Group para la DB
-        this.dbSg = SecurityGroup.Builder.create(this, "DatabaseSG")
+        // 1. Security Group específico para Albums
+        this.dbSg = SecurityGroup.Builder.create(this, "AlbumsDatabaseSG")
                 .vpc(vpc)
-                .securityGroupName("users-microservice-rds-db-sg")
+                .securityGroupName("albums-microservice-rds-db-sg")
                 .allowAllOutbound(true)
                 .build();
 
-        // 2. Instancia RDS MySQL
-        this.database = DatabaseInstance.Builder.create(this, "MySQLInstance")
+        // 2. Instancia RDS MySQL para Albums
+        this.database = DatabaseInstance.Builder.create(this, "AlbumsMySQLInstance")
                 .engine(DatabaseInstanceEngine.mysql(MySqlInstanceEngineProps.builder()
                         .version(MysqlEngineVersion.VER_8_0)
                         .build()))
-                .instanceType(InstanceType.of(InstanceClass.BURSTABLE3, InstanceSize.MICRO)) // db.t3.micro
+                .instanceType(InstanceType.of(InstanceClass.BURSTABLE3, InstanceSize.MICRO))
                 .vpc(vpc)
                 .vpcSubnets(SubnetSelection.builder()
-                        .subnetType(SubnetType.PRIVATE_ISOLATED) // <--- Crucial: que coincida con tu VpcStack
+                        .subnetType(SubnetType.PRIVATE_ISOLATED)
                         .build())
                 .securityGroups(java.util.Collections.singletonList(this.dbSg))
-                .instanceIdentifier("users")
-                .databaseName("users")
+                .instanceIdentifier("photo-api-albums-db") // Identificador solicitado
+                .databaseName("albums")                    // Nombre DB solicitado
                 .credentials(Credentials.fromPassword("admin",
-                        software.amazon.awscdk.SecretValue.unsafePlainText("zugqIn-tuzxot-juxki0")))
+                        software.amazon.awscdk.SecretValue.unsafePlainText("fysgeS-ruzfik-2tyrhu")))
                 .port(3306)
-                .multiAz(false) // Para asegurar Free Tier
+                .multiAz(false)
                 .allocatedStorage(20)
-                .backupRetention(Duration.days(0)) // Sin backups automáticos por ahora
-                .publiclyAccessible(false) // Acceso privado
-                .removalPolicy(RemovalPolicy.DESTROY) // ¡CUIDADO! Cambiar a RETAIN en producción
-                .build();
-
-        CfnOutput.Builder.create(this, "RDSHost")
-                .value(this.database.getDbInstanceEndpointAddress())
-                .description("Host de la base de datos MySQL (solo accesible internamente)")
+                .backupRetention(Duration.days(0)) // No enable automated backups
+                .publiclyAccessible(false)
+                .removalPolicy(RemovalPolicy.DESTROY)
                 .build();
     }
 
     public DatabaseInstance getDatabase() { return database; }
-    public SecurityGroup getDbSg() { return dbSg; }
+    public SecurityGroup getDbSecurityGroup() { return dbSg; }
+
 }
