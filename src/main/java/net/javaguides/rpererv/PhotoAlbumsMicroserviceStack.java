@@ -25,6 +25,7 @@ import software.amazon.awscdk.services.ecs.OperatingSystemFamily;
 import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.Protocol;
 import software.amazon.awscdk.services.ecs.RuntimePlatform;
+import software.amazon.awscdk.services.ecs.Secret;
 import software.amazon.awscdk.services.ecs.ServiceConnectProps;
 import software.amazon.awscdk.services.ecs.ServiceConnectService;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
@@ -33,6 +34,10 @@ import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
 import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.rds.DatabaseInstance;
+import software.amazon.awscdk.services.ssm.IStringParameter;
+import software.amazon.awscdk.services.ssm.SecureStringParameterAttributes;
+import software.amazon.awscdk.services.ssm.StringParameter;
+import software.amazon.awscdk.services.ssm.StringParameterAttributes;
 import software.constructs.Construct;
 
 public class PhotoAlbumsMicroserviceStack extends Stack {
@@ -60,13 +65,47 @@ public class PhotoAlbumsMicroserviceStack extends Stack {
                 .resources(List.of("*"))
                 .build());
 
+        // Añadimos permiso para leer parámetros de SSM al Execution Role
+        // 1. Permiso para entrar a la "oficina" de SSM y tomar los parámetros
+        taskDefinition.getExecutionRole().addToPrincipalPolicy(PolicyStatement.Builder.create()
+                .actions(Arrays.asList("ssm:GetParameters", "ssm:GetParameter"))
+                .resources(List.of("arn:aws:ssm:" + this.getRegion() + ":" + this.getAccount() + ":parameter/prod/photo-albums-microservice/*"))
+                .build());
+
+        // 2. Permiso para usar la "llave" (KMS) y descifrar el valor de la contraseña
+        taskDefinition.getExecutionRole().addToPrincipalPolicy(PolicyStatement.Builder.create()
+                .actions(List.of("kms:Decrypt"))
+                // Si usaste la clave por defecto de AWS, puedes usar "*" o el ARN de 'alias/aws/ssm'
+                .resources(List.of("*"))
+                .build());
+
+        // Recuperamos las referencias de Parameter Store (SSM)
+        // Esto solo crea una referencia, no extrae el valor aún
+        IStringParameter dbNameParam = StringParameter.fromStringParameterAttributes(this, "DbNameRef",
+                StringParameterAttributes.builder()
+                        .parameterName("/prod/photo-albums-microservice/mysql/database-name")
+                        .build());
+        String dbPort = StringParameter.valueForStringParameter(this, "/prod/photo-albums-microservice/mysql/database-port");
+        String dbUser = StringParameter.valueForStringParameter(this, "/prod/photo-albums-microservice/mysql/database-user-name");
+        // En lugar de IStringParameter, usamos la clase Secret de ECS
+        Secret dbPasswordSecret = Secret.fromSsmParameter(
+                StringParameter.fromSecureStringParameterAttributes(this, "SecurePassReference",
+                        SecureStringParameterAttributes.builder()
+                                .parameterName("/prod/photo-albums-microservice/mysql/database-user-password")
+                                .version(1)
+                                .build())
+        );
+
         Map<String, String> envVariables = new HashMap<>();
         envVariables.put("spring.profiles.active", "prod");
         envVariables.put("HOST_NAME", serviceProps.database().getDbInstanceEndpointAddress());
-        envVariables.put("DATABASE_PORT", "3306");
-        envVariables.put("DATABASE_NAME", "albums");
-        envVariables.put("DATABASE_USER_NAME", "admin");
-        envVariables.put("DATABASE_USER_PASSWORD", "fysgeS-ruzfik-2tyrhu");
+        envVariables.put("DATABASE_PORT", dbPort);
+        envVariables.put("DATABASE_USER_NAME", dbUser);
+
+        // Crea un mapa separado para los secretos
+        Map<String, Secret> secretVariables = new HashMap<>();
+        secretVariables.put("DATABASE_NAME", Secret.fromSsmParameter(dbNameParam));
+        secretVariables.put("DATABASE_USER_PASSWORD", dbPasswordSecret);
 
         // 2. Añadir el Contenedor
         ContainerDefinition container = taskDefinition.addContainer("PhotoAlbumsContainer",
@@ -74,6 +113,7 @@ public class PhotoAlbumsMicroserviceStack extends Stack {
                         .containerName("photo-albums-microservice") // Corregido typo 'phto'
                         .image(ContainerImage.fromEcrRepository(serviceProps.repository()))
                         .environment(envVariables)
+                        .secrets(secretVariables)
                         .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
                                 .logRetention(RetentionDays.ONE_DAY)
                                 .streamPrefix("photo-albums-microservice")

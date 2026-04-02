@@ -28,8 +28,11 @@ public class MicroservicesEcsCdkApp {
                 .tags(infraestructureTags)
                 .build();
 
-        // 1. Repositorios ECR
+        // 1.1 Repositorios ECR
         EcrStack ecrStack = new EcrStack(app, "MicroservicesEcr", commonProps);
+
+        // 1.2 Crear el stack de parámetros primero
+        ParametersStack parametersStack = new ParametersStack(app, "ParametersStack", commonProps);
 
         // 2. Red (VPC) - La base de todo
         VpcStack vpcStack = new VpcStack(app, "MicroservicesVpc", commonProps);
@@ -46,8 +49,6 @@ public class MicroservicesEcsCdkApp {
                 commonProps,
                 new ClusterStackProps(vpcStack.getVpc()));
 
-
-
         // 5.1 Servicio Fargate photo-albums
         // Nota: El paso de ecrStack.getUsersMicroserviceRepository() crea una dependencia implícita
         PhotoAlbumsMicroserviceStack albumsStack = new PhotoAlbumsMicroserviceStack(app, "PhotoAlbumsMicroserviceService",
@@ -57,6 +58,8 @@ public class MicroservicesEcsCdkApp {
                         ecrStack.getPhotoAlbumsMicroserviceRepository(),
                         albumsDbStack.getDatabase()
                 ));
+        albumsStack.addDependency(albumsDbStack);
+        albumsStack.addDependency(parametersStack);
 
         // 5.2 Servicio Fargate users
         // Nota: El paso de ecrStack.getUsersMicroserviceRepository() crea una dependencia implícita
@@ -67,6 +70,8 @@ public class MicroservicesEcsCdkApp {
                         ecrStack.getUsersMicroserviceRepository(),
                         usersDatabaseStack.getDatabase()
                 ));
+        usersStack.addDependency(usersDatabaseStack);
+        usersStack.addDependency(parametersStack);
 
         // Permitir que el Security Group de Users se conecte al de Albums en el puerto 8080
         // Añadimos .getService() antes de .getConnections()

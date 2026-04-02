@@ -2,6 +2,7 @@ package net.javaguides.rpererv;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import software.amazon.awscdk.CfnOutput;
 import software.amazon.awscdk.Duration;
@@ -22,12 +23,17 @@ import software.amazon.awscdk.services.ecs.OperatingSystemFamily;
 import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.Protocol;
 import software.amazon.awscdk.services.ecs.RuntimePlatform;
+import software.amazon.awscdk.services.ecs.Secret;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateServiceProps;
 import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
 import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.rds.DatabaseInstance;
+import software.amazon.awscdk.services.ssm.IStringParameter;
+import software.amazon.awscdk.services.ssm.SecureStringParameterAttributes;
+import software.amazon.awscdk.services.ssm.StringParameter;
+import software.amazon.awscdk.services.ssm.StringParameterAttributes;
 import software.constructs.Construct;
 
 /**
@@ -65,6 +71,38 @@ public class UsersMicroserviceStack extends Stack {
                 .resources(Arrays.asList("*"))
                 .build());
 
+        // Añadimos permiso para leer parámetros de SSM al Execution Role
+        // 1. Permiso para entrar a la "oficina" de SSM y tomar los parámetros
+        taskDefinition.getExecutionRole().addToPrincipalPolicy(PolicyStatement.Builder.create()
+                .actions(Arrays.asList("ssm:GetParameters", "ssm:GetParameter"))
+                .resources(List.of("arn:aws:ssm:" + this.getRegion() + ":" + this.getAccount() + ":parameter/prod/users-microservice/*"))
+                .build());
+
+        // 2. Permiso para usar la "llave" (KMS) y descifrar el valor de la contraseña
+        taskDefinition.getExecutionRole().addToPrincipalPolicy(PolicyStatement.Builder.create()
+                .actions(List.of("kms:Decrypt"))
+                // Si usaste la clave por defecto de AWS, puedes usar "*" o el ARN de 'alias/aws/ssm'
+                .resources(List.of("*"))
+                .build());
+
+        // Recuperamos las referencias de Parameter Store (SSM)
+        IStringParameter dbNameParam = StringParameter.fromStringParameterAttributes(this, "UsersDbNameRef",
+                StringParameterAttributes.builder()
+                        .parameterName("/prod/users-microservice/mysql/database-name")
+                        .build());
+        String dbPort = StringParameter.valueForStringParameter(this, "/prod/users-microservice/mysql/database-port");
+        String dbUser = StringParameter.valueForStringParameter(this, "/prod/users-microservice/mysql/database-user-name");
+        // Nota: Para SecureString, usamos valueForSecureStringParameter
+        // Para la contraseña (SecureString)
+        // En lugar de IStringParameter, usamos la clase Secret de ECS
+        Secret dbPasswordSecret = Secret.fromSsmParameter(
+                StringParameter.fromSecureStringParameterAttributes(this, "SecurePassReference",
+                        SecureStringParameterAttributes.builder()
+                                .parameterName("/prod/users-microservice/mysql/database-user-password")
+                                .version(1)
+                                .build())
+        );
+
         // DB.1. Preparar el mapa de variables de entorno
         Map<String, String> envVariables = new HashMap<>();
 
@@ -74,11 +112,14 @@ public class UsersMicroserviceStack extends Stack {
         // Variables que coinciden con tu application.properties
         // El endpoint de RDS (ej: users.xxxx.us-east-1.rds.amazonaws.com)
         envVariables.put("HOST_NAME", serviceProps.database().getDbInstanceEndpointAddress());
-        envVariables.put("DATABASE_PORT", "3306");
-        envVariables.put("DATABASE_NAME", "users");
-        envVariables.put("DATABASE_USER_NAME", "admin"); // El master username que definiste
-        envVariables.put("DATABASE_USER_PASSWORD", "zugqIn-tuzxot-juxki0"); // Tu master password
+        envVariables.put("DATABASE_PORT", dbPort);
+        envVariables.put("DATABASE_USER_NAME", dbUser); // El master username que definiste
         envVariables.put("ALBUMS_URL", "http://photo-albums:8080/albums"); // URL del microservicio de albums usando Service Connect (nombre del servicio + puerto)
+
+        // Crea un mapa separado para los secretos
+        Map<String, Secret> secretVariables = new HashMap<>();
+        secretVariables.put("DATABASE_NAME", Secret.fromSsmParameter(dbNameParam));
+        secretVariables.put("DATABASE_USER_PASSWORD", dbPasswordSecret);
 
         // 2. Añadir el Contenedor (Puerto 8081 para Spring Boot)
         ContainerDefinition container = taskDefinition.addContainer("UsersContainer",
@@ -86,6 +127,7 @@ public class UsersMicroserviceStack extends Stack {
                         .containerName("users-microservice")
                         .image(ContainerImage.fromEcrRepository(serviceProps.repository()))
                         .environment(envVariables)
+                        .secrets(secretVariables)
                         .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
                                 .logRetention(RetentionDays.ONE_DAY)
                                 .streamPrefix("users-microservice")
