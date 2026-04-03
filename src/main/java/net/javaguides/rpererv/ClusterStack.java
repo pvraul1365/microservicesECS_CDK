@@ -32,7 +32,7 @@ public class ClusterStack extends Stack {
                 .containerInsightsV2(ContainerInsights.ENABLED)
                 // AÑADE ESTO:
                 .defaultCloudMapNamespace(CloudMapNamespaceOptions.builder()
-                        .name("local") // Este debe coincidir con el que pusiste en PhotoAlbumsMicroserviceStack
+                        .name("local") // Este debe coincidir con el que pusiste en PhotoAlbumsMicroserviceStack para el service connect
                         .build())
                 .build());
 
